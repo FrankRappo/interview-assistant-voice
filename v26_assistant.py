@@ -725,6 +725,7 @@ class ModelAudioPlayer:
             logging.error(f"[PLAYBACK] Failed to play Gemini audio: {e}", exc_info=True)
 
     def stop(self):
+        self.last_play_ts = 0.0  # мгновенно отпускаем эхо-гейт
         with self.lock:
             if self.stream:
                 try:
@@ -761,6 +762,12 @@ class App:
         tk.Button(top, text="Reset", command=self.reset,
                   bg="#0f3460", fg="#fff", font=("Consolas", 10),
                   relief=tk.FLAT, padx=12).pack(side=tk.LEFT, padx=5)
+
+        # STOP: мгновенно оборвать озвучку ассистента
+        self.stop_btn = tk.Button(top, text="STOP", command=self.stop_speech,
+                                  bg="#dc3545", fg="#fff", font=("Consolas", 10, "bold"),
+                                  relief=tk.FLAT, padx=12)
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
 
         # v26: кнопка Interview Mode
         self.interview_btn = tk.Button(top, text="Interview: OFF", command=self.toggle_interview,
@@ -960,6 +967,9 @@ class App:
                 self.muted = True
                 if self.audio:
                     self.audio.muted = True
+                if self.player and self.player.is_speaking():
+                    self.player.stop()  # перебить речь ассистента
+                    logging.info("[SPEECH] Interrupted by Space")
                 self.root.after(0, lambda: self._mute_ui(True))
 
         def release(k):
@@ -1249,6 +1259,8 @@ class App:
                         prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
                     ),
                 ),
+                # Отключаем thinking - заметно ускоряет первый аудио-ответ
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
                 # VAD настроенный для лучшего распознавания
                 # v26: улучшенные настройки - дольше ждет паузу, не обрезает речь
                 realtime_input_config=types.RealtimeInputConfig(
@@ -1257,7 +1269,7 @@ class App:
                         start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                         end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,  # v26: меньше агрессии
                         prefix_padding_ms=500,  # v26: больше захват начала (300->500)
-                        silence_duration_ms=800,  # v26: дольше ждем паузу (500->800)
+                        silence_duration_ms=600,  # 800->600: быстрее начинает отвечать
                     )
                 ),
                 input_audio_transcription=types.AudioTranscriptionConfig(),
@@ -1466,6 +1478,13 @@ class App:
             self.player.stop()
         self._set_status("Disconnected", "#888", "#ff4444")
         self.btn.config(text="CONNECT", bg="#28a745")
+
+    def stop_speech(self):
+        """Мгновенно остановить озвучку ассистента и сразу вернуть микрофон."""
+        if self.player:
+            self.player.stop()
+        logging.info("[SPEECH] Stopped by user")
+        self._set_status("Speech stopped", "#ffaa00", "#ffaa00")
 
     def reset(self):
         self.disconnect()
