@@ -22,7 +22,11 @@
 
 ```python
 API_KEY_GEMINI = "your-gemini-key"
-API_KEY_GEMMA = "your-gemma-key"
+API_KEY_GEMMA = "your-gemma-key"   # можно продублировать GEMINI-ключ
+
+# Прокси для доступа к Google API из регионов, где API недоступен напрямую.
+# Пустая строка или отсутствие строки = работать напрямую.
+API_PROXY = "socks5://127.0.0.1:8081"
 ```
 
 Либо переменные окружения `GEMINI_API_KEY` / `GEMMA_API_KEY`.
@@ -32,7 +36,7 @@ API_KEY_GEMMA = "your-gemma-key"
 ## Запуск
 
 ```powershell
-python -m pip install pyaudiowpatch sounddevice google-genai numpy pynput
+python -m pip install pyaudiowpatch sounddevice google-genai numpy pynput socksio
 python v26_assistant.py
 ```
 

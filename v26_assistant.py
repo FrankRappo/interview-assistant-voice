@@ -25,7 +25,7 @@ v26: Gemini Audio + Gemma + Health Monitor + Voice Improvements + Interview Mode
 - [v26] Логирование confidence score для отладки распознавания
 - [v26] Режим Interview Mode - Gemini задает вопросы на собеседовании
 
-Install: pip install pyaudiowpatch sounddevice google-genai numpy pynput
+Install: pip install pyaudiowpatch sounddevice google-genai numpy pynput socksio
 """
 
 import asyncio
@@ -89,11 +89,11 @@ from google.genai import types
 # CONFIG
 # ============================================
 
-def _load_api_keys():
-    """Load local API keys without storing secrets in git."""
+def _load_secrets_module():
+    """Return the assistant_secrets module (import or sidecar file), or None."""
     try:
-        from assistant_secrets import API_KEY_GEMINI as gemini_key, API_KEY_GEMMA as gemma_key
-        return gemini_key, gemma_key
+        import assistant_secrets
+        return assistant_secrets
     except ImportError:
         pass
     try:
@@ -103,9 +103,24 @@ def _load_api_keys():
             spec = importlib.util.spec_from_file_location("_assistant_secrets_external", secrets_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            return getattr(module, "API_KEY_GEMINI", ""), getattr(module, "API_KEY_GEMMA", "")
+            return module
     except Exception as e:
         logging.warning(f"Could not load assistant_secrets.py: {e}")
+    return None
+
+def _load_api_keys():
+    """Load local API keys without storing secrets in git."""
+    module = _load_secrets_module()
+    if module is not None:
+        proxy = getattr(module, "API_PROXY", "")
+        if proxy:
+            os.environ.setdefault("ALL_PROXY", proxy)
+            os.environ.setdefault("HTTPS_PROXY", proxy)
+            logging.info(f"[PROXY] Using proxy from assistant_secrets.py: {proxy}")
+        gemini_key = getattr(module, "API_KEY_GEMINI", "")
+        if gemini_key:
+            gemma_key = getattr(module, "API_KEY_GEMMA", "") or gemini_key
+            return gemini_key, gemma_key
     return (os.environ.get("GEMINI_API_KEY", ""),
             os.environ.get("GEMMA_API_KEY", os.environ.get("GEMINI_API_KEY", "")))
 
