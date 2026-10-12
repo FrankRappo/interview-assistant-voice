@@ -131,6 +131,7 @@ GEMMA_MODEL = "models/gemma-4-26b-a4b-it"
 
 CHUNK_DURATION = 0.1  # 100ms - оптимально для распознавания
 SILENCE_THRESHOLD = 150
+ECHO_TAIL_SEC = 1.5  # эхо-гейт: сколько секунд после последнего чанка озвучки не слать захват в Gemini
 
 MAX_FONT = 14
 MIN_FONT = 5  # минимальный читаемый размер для текста: важно
@@ -316,6 +317,8 @@ class AudioCapture:
         self.mic_buf = []
         self.lock = threading.Lock()
         self.muted = False
+        self.echo_gate = None  # callable -> True пока ассистент озвучивает ответ (эхо-гейт)
+        self._gate_on = False
 
     def _safe_device_name(self, info):
         return str(info.get("name", "unknown")).strip()
@@ -619,6 +622,17 @@ class AudioCapture:
             # v26: больше веса микрофону для лучшего распознавания (mic: 2.5->4, lb: 4->2)
             mixed = lb.astype(np.float32)*2 + mc.astype(np.float32)*4
             mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
+
+            # Эхо-гейт: пока плеер озвучивает ответ ассистента, шлём тишину вместо смеси,
+            # чтобы модель не слышала собственный голос из колонок и не отвечала сама себе.
+            gate = bool(self.echo_gate is not None and self.echo_gate())
+            if gate != self._gate_on:
+                self._gate_on = gate
+                logging.info("[ECHO-GATE] %s", "ENGAGED - модель говорит, захват заглушен" if gate else "released - захват возобновлён")
+            if gate:
+                self.q.put(b"\x00" * (chunk * 2))  # int16 silence
+                continue
+
             self.q.put(mixed.tobytes())
 
     def stop(self):
@@ -654,6 +668,11 @@ class ModelAudioPlayer:
         self.rate = None
         self.lock = threading.Lock()
         self.enabled = True
+        self.last_play_ts = 0.0  # время последнего записанного в динамики чанка
+
+    def is_speaking(self, tail=ECHO_TAIL_SEC):
+        """True, если озвучка идёт или закончилась меньше чем tail секунд назад."""
+        return (time.time() - self.last_play_ts) < tail
 
     def _parse_rate(self, mime_type):
         try:
@@ -691,6 +710,7 @@ class ModelAudioPlayer:
                     )
                     logging.info(f"[PLAYBACK] Gemini audio output opened: rate={rate} channels=1")
                 self.stream.write(data)
+                self.last_play_ts = time.time()
         except Exception as e:
             logging.error(f"[PLAYBACK] Failed to play Gemini audio: {e}", exc_info=True)
 
@@ -1268,6 +1288,7 @@ class App:
         # Запускаем audio capture только при первом подключении
         if not self.audio or not self.audio.running:
             self.audio = AudioCapture(self.q)
+            self.audio.echo_gate = self.player.is_speaking
             if not self.audio.start():
                 raise RuntimeError("Audio failed")
 
