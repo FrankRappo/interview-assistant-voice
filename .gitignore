@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.zip
+*.exe
+build/
+dist/
+*.bak*
+*_README.md
+!WORKING_VERSION_INSTRUCTION.md
+assistant_secrets.py
+*.env
