@@ -3,7 +3,9 @@
 Голосовой ассистент-суфлёр для собеседований — версия, которая **отвечает голосом через динамики**.
 
 Отдельно от [interview-assistant](https://github.com/FrankRappo/interview-assistant) (текстовая версия).
-База: v26_assistant, сборка с озвучкой от 2026-09-25 12:15 (`bak_revert_playback`).
+База: финальная текстовая версия v26_assistant от 2026-09-25 14:17 (свежие промпты,
+быстрая модель второй панели, улучшенный загрузчик ключей) + playback-блоки озвучки
+из сборки `bak_revert_playback` 12:15.
 
 ## Отличие от текстовой версии
 
@@ -48,7 +50,7 @@ python v26_assistant.py
 
 ```python
 GEMINI_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-GEMMA_MODEL  = "models/gemma-4-26b-a4b-it"
+GEMMA_MODEL  = "models/gemini-2.5-flash"
 ```
 
 ## Возможности

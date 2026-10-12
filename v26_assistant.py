@@ -24,6 +24,7 @@ v26: Gemini Audio + Gemma + Health Monitor + Voice Improvements + Interview Mode
 - [v26] Индикатор громкости микрофона в реальном времени
 - [v26] Логирование confidence score для отладки распознавания
 - [v26] Режим Interview Mode - Gemini задает вопросы на собеседовании
+- [voice] Озвучка ответов Gemini через динамики (ModelAudioPlayer)
 
 Install: pip install pyaudiowpatch sounddevice google-genai numpy pynput socksio
 """
@@ -37,17 +38,34 @@ from tkinter import scrolledtext
 import numpy as np
 import logging
 import os
+import sys
+import importlib.util
 
 from pynput import keyboard
 
-LOG_PATH = os.path.join(os.path.dirname(__file__) or '.', "v24.log")
+def _app_base_dir():
+    """Directory for user-visible runtime files (works both as .py and PyInstaller .exe)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__)) or "."
+
+
+APP_BASE_DIR = _app_base_dir()
+LOG_PATH = os.path.join(APP_BASE_DIR, "v24.log")
+_log_handlers = []
+try:
+    _log_handlers.append(logging.FileHandler(LOG_PATH, encoding='utf-8'))
+except OSError:
+    fallback_dir = os.path.join(os.environ.get("LOCALAPPDATA", APP_BASE_DIR), "v26_assistant")
+    os.makedirs(fallback_dir, exist_ok=True)
+    LOG_PATH = os.path.join(fallback_dir, "v24.log")
+    _log_handlers.append(logging.FileHandler(LOG_PATH, encoding='utf-8'))
+if getattr(sys, "stderr", None):
+    _log_handlers.append(logging.StreamHandler())
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_PATH, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=_log_handlers
 )
 
 # Глобальная обработка исключений - ловим всё что падает
@@ -57,7 +75,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         return
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
-import sys
 sys.excepthook = handle_exception
 
 # Обработка для потоков
@@ -88,24 +105,21 @@ from google.genai import types
 # ============================================
 # CONFIG
 # ============================================
-
 def _load_secrets_module():
-    """Return the assistant_secrets module (import or sidecar file), or None."""
-    try:
-        import assistant_secrets
-        return assistant_secrets
-    except ImportError:
-        pass
-    try:
-        import importlib.util
-        secrets_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assistant_secrets.py")
-        if os.path.exists(secrets_path):
+    """Return the assistant_secrets module (sidecar file near app or exe), or None."""
+    for base_dir in (APP_BASE_DIR, getattr(sys, "_MEIPASS", None)):
+        if not base_dir:
+            continue
+        secrets_path = os.path.join(base_dir, "assistant_secrets.py")
+        if not os.path.exists(secrets_path):
+            continue
+        try:
             spec = importlib.util.spec_from_file_location("_assistant_secrets_external", secrets_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
-    except Exception as e:
-        logging.warning(f"Could not load assistant_secrets.py: {e}")
+        except Exception as e:
+            logging.warning(f"Could not load external assistant_secrets.py: {e}")
     return None
 
 def _load_api_keys():
@@ -118,16 +132,17 @@ def _load_api_keys():
             os.environ.setdefault("HTTPS_PROXY", proxy)
             logging.info(f"[PROXY] Using proxy from assistant_secrets.py: {proxy}")
         gemini_key = getattr(module, "API_KEY_GEMINI", "")
+        gemma_key = getattr(module, "API_KEY_GEMMA", "") or gemini_key
         if gemini_key:
-            gemma_key = getattr(module, "API_KEY_GEMMA", "") or gemini_key
             return gemini_key, gemma_key
-    return (os.environ.get("GEMINI_API_KEY", ""),
-            os.environ.get("GEMMA_API_KEY", os.environ.get("GEMINI_API_KEY", "")))
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    gemma_key = os.environ.get("GEMMA_API_KEY", gemini_key)
+    return gemini_key, gemma_key
 
 API_KEY_GEMINI, API_KEY_GEMMA = _load_api_keys()
 
 GEMINI_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-GEMMA_MODEL = "models/gemma-4-26b-a4b-it"
+GEMMA_MODEL = "models/gemini-2.5-flash"
 
 CHUNK_DURATION = 0.1  # 100ms - оптимально для распознавания
 SILENCE_THRESHOLD = 150
@@ -243,16 +258,12 @@ INTERVIEW_PROMPT = """Ты интервьюер для позиции Senior Sys
 НЕ задавай простые вопросы типа "Что такое Docker?" - задавай практические сценарии.
 """
 
-GEMMA_PROMPT = """Ты редактор-улучшатель на IT консультацией для Senior System Administrator / DevOps / SRE.
-Твоя цель просто улучшить ответ на реальный вопрос. Излагай его не перечисляемым списком 4-6 предложений.
-Описывай концепции и решения своими словами, объясняй суть.
-
-ВАЖНО: НЕ добавляй примеры кода, НЕ пиши команды, НЕ создавай блоки кода. Только текстовое объяснение.
-
-Пиши живым разговорным языком опытного коллеги. Убирай вступления и самопредставления
-(вроде "Как AI модель...") и канцелярит ("является", "данный", "осуществляется").
-
-Если тебе встречаются термины такие сокращения формата: Kubernetes->кубернетес, Docker->докер."""
+GEMMA_PROMPT = """Ты быстрая вторая панель.
+Улучши ответ Gemini коротко: 2-3 понятных предложения.
+Не пиши длинно, не добавляй код, не делай большие списки.
+Если это проверка связи — ответь одной короткой фразой.
+Отвечай по смыслу вопроса, не уводи общий вопрос в DevOps/SRE без явной причины.
+Пиши живым разговорным языком: без вступлений про AI-модель и без канцелярита."""
 
 
 def is_reading_answer(text: str, answer: str) -> bool:
@@ -1513,6 +1524,10 @@ if __name__ == "__main__":
     if not HAVE_WASAPI:
         print("WARNING: pyaudiowpatch not found")
     App().run()
+
+
+
+
 
 
 
